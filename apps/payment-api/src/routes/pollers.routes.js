@@ -1,4 +1,4 @@
-import crypto from 'node:crypto';
+﻿import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -503,7 +503,16 @@ export function registerPollerRoutes(server, ctx) {
 
     // Canonical runtime URL derivation (Part C2)
     const runtime = resolveRuntimeUrls(merchant?.branding || {});
-    const baseUrl = runtime.apiUrl;
+    let baseUrl = (process.env.YOUPI_PUBLIC_URL || process.env.RENDER_EXTERNAL_URL || '').trim().replace(/\/+$/, '');
+    if (!baseUrl) {
+      const forwardedHost = req.headers['x-forwarded-host'] || req.headers['host'];
+      if (forwardedHost && !forwardedHost.includes('localhost') && !forwardedHost.includes('127.0.0.1')) {
+        const proto = req.headers['x-forwarded-proto'] || (forwardedHost.includes('onrender.com') ? 'https' : 'http');
+        baseUrl = `${proto}://${forwardedHost}`;
+      } else {
+        baseUrl = runtime.apiUrl;
+      }
+    }
     const token = enrollmentSecret;
     const sessionId = crypto.randomUUID();
     const expiresAt = Date.now() + (10 * 60 * 1000); // 10 minutes
@@ -647,3 +656,4 @@ export function registerPollerRoutes(server, ctx) {
   server.get('/api/v1/admin/sms-gateway/download-apk', serveApk);
   server.get('/youpi-sms-gateway.apk', serveApk);
 }
+

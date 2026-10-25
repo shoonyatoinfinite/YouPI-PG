@@ -21,6 +21,9 @@ import { createPaymentApp } from '../apps/payment-api/src/index.js';
 import { AdminServer } from '../apps/merchant-admin/src/server.js';
 import { CheckoutServer } from '../apps/checkout-portal/src/server.js';
 
+if (!process.env.YOUPI_PUBLIC_URL && process.env.RENDER_EXTERNAL_URL) {
+  process.env.YOUPI_PUBLIC_URL = process.env.RENDER_EXTERNAL_URL;
+}
 const PORT = Number(process.env.PORT || process.env.PAYMENT_API_PORT || 10000);
 const HOST = process.env.YOUPI_BIND_HOST || '0.0.0.0';
 
@@ -114,3 +117,4 @@ masterServer.listen(PORT, HOST, () => {
   console.log(`  Health Check:              http://${HOST}:${PORT}/health`);
   console.log('====================================================');
 });
+
