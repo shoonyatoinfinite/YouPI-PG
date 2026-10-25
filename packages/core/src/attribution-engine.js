@@ -1,4 +1,4 @@
-import { PaymentStatus, ObservationAttributionStatus, TicketStatus, SenderType, isTerminalStatus } from '@youpi/common';
+﻿import { PaymentStatus, ObservationAttributionStatus, TicketStatus, SenderType, isTerminalStatus } from '@youpi/common';
 
 export class AttributionEngine {
   /**
@@ -231,7 +231,7 @@ export class AttributionEngine {
     if (currentSession && currentSession.amountPaise !== normalizedObs.amountPaise) {
       const matchRow = this.sessionRepo.db.queryOne(`
         SELECT * FROM payment_sessions
-        WHERE receiving_account_id = ? AND status IN ('ACTIVE', 'PROCESSING') AND amount_paise = ?
+        WHERE receiving_account_id = ? AND status IN ('ACTIVE', 'PROCESSING', 'INITIATED') AND amount_paise = ?
         ORDER BY created_at DESC
         LIMIT 1
       `, [normalizedObs.receivingAccountId, Number(normalizedObs.amountPaise)]);
@@ -246,7 +246,7 @@ export class AttributionEngine {
       const scopedRow = this.sessionRepo.db.queryOne(`
         SELECT * FROM payment_sessions
         WHERE receiving_account_id = ?
-          AND status IN ('ACTIVE', 'PROCESSING')
+          AND status IN ('ACTIVE', 'PROCESSING', 'INITIATED')
           AND amount_paise = ?
         ORDER BY created_at DESC
         LIMIT 1
@@ -258,7 +258,7 @@ export class AttributionEngine {
 
     if (currentSession) {
       // Invariant Check 1: Must be in ACTIVE or PROCESSING status
-      const isEligibleStatus = [PaymentStatus.ACTIVE, PaymentStatus.PROCESSING].includes(currentSession.status);
+      const isEligibleStatus = [PaymentStatus.ACTIVE, PaymentStatus.PROCESSING, PaymentStatus.INITIATED].includes(currentSession.status);
 
       // Invariant Check 2: Exact Amount Match (in integer paise)
       const isAmountMatch = currentSession.amountPaise === normalizedObs.amountPaise;
@@ -853,3 +853,5 @@ export class AttributionEngine {
     };
   }
 }
+
+
