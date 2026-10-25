@@ -177,7 +177,7 @@ export function registerCustomerRoutes(server, ctx) {
   server.post('/api/v1/customer/send-otp', async (req, res) => {
     const body = await HttpServer.parseBody(req).catch(() => ({}));
     const rawMobile = body.mobileNumber || body.phoneNumber || body.mobile || body.phone;
-    const name = (body.name || body.fullName || '').trim();
+    const name = (body.customerName || body.displayName || body.name || body.fullName || '').trim();
     const email = normalizeEmail(body.email);
     const isNewUser = Boolean(body.isNewUser);
 
@@ -238,7 +238,7 @@ export function registerCustomerRoutes(server, ctx) {
     // Dispatch via WhatsApp Berry Protocol
     const berry = getBerry();
     let dispatchResult = { success: true, delivered: false, simulated: true };
-    const displayName = existingUser?.name || name || '';
+    const displayName = (name && !/^Customer\\s+\\d+$/i.test(name)) ? name : (existingUser?.name && !/^Customer\\s+\\d+$/i.test(existingUser.name)) ? existingUser.name : '';
 
     if (berry) {
       try {
