@@ -624,7 +624,9 @@ export class WhatsAppBerryService extends EventEmitter {
    * @param {string} [customerName]
    */
   async sendOtp(to, otpCode, customerName = '') {
-    const greeting = customerName ? `Hello *${customerName}*!` : 'Hello!';
+    const raw = String(customerName || '').trim();
+    const isPlaceholder = !raw || /^customer(\s*\d+)?$/i.test(raw) || /^\d+$/.test(raw);
+    const greeting = isPlaceholder ? 'Hello!' : `Hello *${raw}*!`;
     const message =
       `🔐 *YOUPI PG Verification Code*\n\n` +
       `${greeting} Your one-time login OTP is: *${otpCode}*\n\n` +

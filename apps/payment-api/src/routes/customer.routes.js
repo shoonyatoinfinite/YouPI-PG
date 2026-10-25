@@ -177,7 +177,9 @@ export function registerCustomerRoutes(server, ctx) {
   server.post('/api/v1/customer/send-otp', async (req, res) => {
     const body = await HttpServer.parseBody(req).catch(() => ({}));
     const rawMobile = body.mobileNumber || body.phoneNumber || body.mobile || body.phone;
-    const name = (body.customerName || body.displayName || body.name || body.fullName || '').trim();
+    const incomingName = String(body.customerName || body.displayName || body.name || body.fullName || '').trim();
+    const isPlaceholder = !incomingName || /^customer(\s*\d+)?$/i.test(incomingName) || /^\d+$/.test(incomingName);
+    const validCustomerName = isPlaceholder ? '' : incomingName;
     const email = normalizeEmail(body.email);
     const isNewUser = Boolean(body.isNewUser);
 
@@ -194,6 +196,14 @@ export function registerCustomerRoutes(server, ctx) {
 
     const existingUser = ctx.customerRepo.findByMobile(cleanMobile);
 
+    // If existing user has placeholder name and customer provides their real name, update it
+    if (existingUser && validCustomerName) {
+      try {
+        ctx.customerRepo.update(existingUser.id, { name: validCustomerName });
+        existingUser.name = validCustomerName;
+      } catch (_) {}
+    }
+
     // Throttle before doing any work: otherwise this endpoint can be used to flood a
     // customer's WhatsApp with OTPs (harassment) or burn merchant messaging credits.
     if (isOtpThrottled(cleanMobile)) {
@@ -203,7 +213,7 @@ export function registerCustomerRoutes(server, ctx) {
 
     // If new user signing up, validate name and email
     if (!existingUser && isNewUser) {
-      if (!name) {
+      if (!validCustomerName) {
         HttpServer.json(res, 400, { error: 'Full name is required for registration.' });
         return;
       }
@@ -223,6 +233,17 @@ export function registerCustomerRoutes(server, ctx) {
     const otpCode = crypto.randomInt(100000, 1000000).toString();
     const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
 
+    // Determine clean human name to address the customer (never Customer 1234)
+    let greetingName = '';
+    if (validCustomerName) {
+      greetingName = validCustomerName;
+    } else if (existingUser?.name) {
+      const isExistingPlaceholder = /^customer(\s*\d+)?$/i.test(existingUser.name.trim()) || /^\d+$/.test(existingUser.name.trim());
+      if (!isExistingPlaceholder) {
+        greetingName = existingUser.name.trim();
+      }
+    }
+
     if (existingUser) {
       ctx.customerRepo.setOtp(cleanMobile, otpCode, expiresAt);
     } else {
@@ -230,19 +251,16 @@ export function registerCustomerRoutes(server, ctx) {
         otpCode,
         expiresAt,
         attempts: 0,
-        name: name || `Customer ${cleanMobile.slice(-4)}`,
+        name: greetingName || 'Customer',
         email: email || `${cleanMobile}@customer.youpi.local`
       });
     }
 
-    // Dispatch via WhatsApp Berry Protocol
     const berry = getBerry();
     let dispatchResult = { success: true, delivered: false, simulated: true };
-    const displayName = (name && !/^Customer\\s+\\d+$/i.test(name)) ? name : (existingUser?.name && !/^Customer\\s+\\d+$/i.test(existingUser.name)) ? existingUser.name : '';
-
     if (berry) {
       try {
-        dispatchResult = await berry.sendOtp(cleanMobile, otpCode, displayName);
+        dispatchResult = await berry.sendOtp(cleanMobile, otpCode, greetingName);
       } catch (err) {
         console.warn(`[CustomerAuth] WhatsApp dispatch notice: ${err.message}`);
       }
