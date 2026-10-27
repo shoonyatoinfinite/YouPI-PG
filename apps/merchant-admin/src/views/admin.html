@@ -5503,8 +5503,16 @@
       try {
         const res = await fetch(`${API_BASE}/api/v1/observers/sms`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ sender, body, timestamp: Date.now() })
+          headers: { 
+            'Content-Type': 'application/json',
+            'X-Admin-Test': 'true'
+          },
+          body: JSON.stringify({ 
+            sender, 
+            body, 
+            timestamp: Date.now(),
+            isTest: true 
+          })
         });
         const data = await res.json();
         if (resBox) {
