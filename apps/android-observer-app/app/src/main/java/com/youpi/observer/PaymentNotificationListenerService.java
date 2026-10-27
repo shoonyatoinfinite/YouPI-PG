@@ -114,6 +114,11 @@ public class PaymentNotificationListenerService extends NotificationListenerServ
         Matcher mUtr = UTR_PATTERN.matcher(title + " " + text);
         if (mUtr.find()) {
             bankRef = mUtr.group(1);
+        } else {
+            Matcher mDigits12 = Pattern.compile("\\b([0-9]{12})\\b").matcher(title + " " + text);
+            if (mDigits12.find()) {
+                bankRef = mDigits12.group(1);
+            }
         }
 
         String vpa = null;

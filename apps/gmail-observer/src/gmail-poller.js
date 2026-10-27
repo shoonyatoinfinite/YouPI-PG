@@ -126,7 +126,10 @@ export class GmailPoller {
 
   async resolveActiveReceivingAccount() {
     try {
-      const res = await fetch(`${this.apiBaseUrl}/api/v1/pollers/active-window`, { signal: AbortSignal.timeout(1000) });
+      const res = await fetch(`${this.apiBaseUrl}/api/v1/pollers/active-window`, {
+        headers: { 'Authorization': `Bearer ${getObserverToken()}` },
+        signal: AbortSignal.timeout(3000)
+      });
       if (res.ok) {
         const data = await res.json();
         if (data.sessions && data.sessions.length > 0) {

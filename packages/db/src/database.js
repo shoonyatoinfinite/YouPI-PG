@@ -45,6 +45,10 @@ export class Database {
         dbPath = path.isAbsolute(process.env.SQLITE_DB_PATH)
           ? process.env.SQLITE_DB_PATH
           : path.resolve(repoRoot, process.env.SQLITE_DB_PATH);
+      } else if (fs.existsSync('/data')) {
+        dbPath = '/data/youpi_pg.sqlite';
+      } else if (fs.existsSync('/var/data')) {
+        dbPath = '/var/data/youpi_pg.sqlite';
       } else {
         dbPath = path.resolve(repoRoot, 'data/youpi_pg.sqlite');
       }

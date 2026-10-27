@@ -132,5 +132,22 @@ masterServer.listen(PORT, HOST, () => {
   console.log(`  Core Payment REST API:     http://${HOST}:${PORT}/api/v1/...`);
   console.log(`  Health Check:              http://${HOST}:${PORT}/health`);
   console.log('====================================================');
+
+  // Automatically start Gmail Observer background scanner on boot if credentials exist
+  setTimeout(async () => {
+    try {
+      if (gmailServerInstance && gmailServerInstance.poller) {
+        await gmailServerInstance.poller.fetchCredentialsFromPaymentApi();
+        if (gmailServerInstance.poller.credentials?.refreshToken) {
+          gmailServerInstance.poller.start();
+          console.log('[✓] Gmail Observer 24/7 background scanner online.');
+        } else {
+          console.log('[i] Gmail Observer: Waiting for OAuth connection.');
+        }
+      }
+    } catch (err) {
+      console.warn('[Gmail Observer auto-start]:', err.message);
+    }
+  }, 2500);
 });
 

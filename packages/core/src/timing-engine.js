@@ -17,7 +17,7 @@ export class TimingEngine {
     this.eventEmitter = options.eventEmitter || { emit: () => {} };
     this.auditRepo = options.auditRepo;
     this.activeDurationMs = options.activeDurationMs || 300000; // 5 minutes
-    this.processingDurationMs = options.processingDurationMs || 30000; // 30 seconds
+    this.processingDurationMs = options.processingDurationMs || 180000; // 3 minutes buffer for bank SMS/Gmail
 
     /** @type {Map<string, NodeJS.Timeout>} */
     this.activeTimers = new Map();
