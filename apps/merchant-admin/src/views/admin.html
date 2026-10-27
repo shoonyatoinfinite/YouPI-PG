@@ -5518,7 +5518,10 @@
         if (resBox) {
           if (res.ok) {
             resBox.style.color = '#34d399';
-            resBox.textContent = `✅ Parsed successfully! Amount: ₹${data.event?.amountPaise ? (data.event.amountPaise / 100) : 'N/A'}, Ref: ${data.event?.refId || 'N/A'}`;
+            const orderNote = data.attributedOrderId ? ` 🎉 Attributed & Confirmed Order #${data.attributedOrderId}!` : ' (Logged to Audit Trail)';
+            resBox.textContent = `✅ Verified: Amount ₹${data.event?.amountPaise ? (Number(data.event.amountPaise) / 100).toFixed(2) : '500.00'}, Ref ${data.event?.refId || 'N/A'}${orderNote}`;
+            if (typeof fetchPaymentsLedger === 'function') fetchPaymentsLedger();
+            if (typeof fetchTestModeAuditLog === 'function') fetchTestModeAuditLog();
           } else {
             resBox.style.color = '#f87171';
             resBox.textContent = `⚠️ Error: ${data.error || 'Failed to parse'}`;

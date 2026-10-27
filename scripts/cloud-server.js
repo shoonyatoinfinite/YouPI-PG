@@ -20,6 +20,7 @@ import { getDatabase, runMigrations } from '../packages/db/src/index.js';
 import { createPaymentApp } from '../apps/payment-api/src/index.js';
 import { AdminServer } from '../apps/merchant-admin/src/server.js';
 import { CheckoutServer } from '../apps/checkout-portal/src/server.js';
+import { GmailObserverServer } from '../apps/gmail-observer/src/server.js';
 
 if (!process.env.YOUPI_PUBLIC_URL && process.env.RENDER_EXTERNAL_URL) {
   process.env.YOUPI_PUBLIC_URL = process.env.RENDER_EXTERNAL_URL;
@@ -48,6 +49,11 @@ const checkoutServerInstance = new CheckoutServer({
   apiBaseUrl: `http://127.0.0.1:${PORT}`
 });
 const checkoutServer = checkoutServerInstance.createServer();
+
+const gmailServerInstance = new GmailObserverServer({
+  apiBaseUrl: `http://127.0.0.1:${PORT}`
+});
+const gmailServer = gmailServerInstance.createServer();
 
 const masterServer = http.createServer((req, res) => {
   let pathname = '/';
@@ -98,6 +104,16 @@ const masterServer = http.createServer((req, res) => {
     pathname.startsWith('/api/customer')
   ) {
     paymentServer.emit('request', req, res);
+    return;
+  }
+
+  // 3b. Gmail OAuth & Observer routes
+  if (
+    pathname === '/oauth/callback' ||
+    pathname === '/oauth/url' ||
+    pathname.startsWith('/api/browser')
+  ) {
+    gmailServer.emit('request', req, res);
     return;
   }
 

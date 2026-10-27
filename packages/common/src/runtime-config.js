@@ -238,6 +238,10 @@ export function resolvePairingUrl(options = {}) {
  */
 export function resolveGmailRedirectUri(branding = {}) {
   if (process.env.GMAIL_REDIRECT_URI) return process.env.GMAIL_REDIRECT_URI;
+  const publicBase = process.env.YOUPI_PUBLIC_URL || process.env.RENDER_EXTERNAL_URL || process.env.BASE_CHECKOUT_URL;
+  if (publicBase && !publicBase.includes('localhost') && !publicBase.includes('127.0.0.1')) {
+    return `${publicBase.replace(/\/+$/, '')}/oauth/callback`;
+  }
   try {
     return `${resolveRuntimeUrls(branding || {}).gmailUrl}/oauth/callback`;
   } catch {

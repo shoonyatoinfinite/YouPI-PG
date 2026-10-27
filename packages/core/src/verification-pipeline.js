@@ -624,6 +624,32 @@ export class PaymentVerificationPipeline {
           session = this.sessionRepo.mapRow(matchRow);
         }
       }
+
+      // Universal Bank SMS Fallback: Most Indian bank SMS do not embed the merchant VPA.
+      // Match active/processing session by amount for this receiving account or merchant.
+      if (!session && input.receivingAccountId) {
+        const matchRow = this.db.queryOne(`
+          SELECT * FROM payment_sessions
+          WHERE status IN ('ACTIVE', 'PROCESSING')
+            AND amount_paise = ?
+            AND receiving_account_id = ?
+          ORDER BY created_at DESC LIMIT 1
+        `, [Number(parsedData.amountPaise), input.receivingAccountId]);
+        if (matchRow) {
+          session = this.sessionRepo.mapRow(matchRow);
+        }
+      }
+      if (!session) {
+        const matchRow = this.db.queryOne(`
+          SELECT * FROM payment_sessions
+          WHERE status IN ('ACTIVE', 'PROCESSING')
+            AND amount_paise = ?
+          ORDER BY created_at DESC LIMIT 1
+        `, [Number(parsedData.amountPaise)]);
+        if (matchRow) {
+          session = this.sessionRepo.mapRow(matchRow);
+        }
+      }
     }
 
     if (!session) {

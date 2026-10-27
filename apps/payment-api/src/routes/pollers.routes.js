@@ -473,17 +473,182 @@ export function registerPollerRoutes(server, ctx) {
     const isTestSms = isAdminTest || body.isTest === true || pipeResult.reference === '999888777666' || pipeResult.reference === 'REF987654321';
     if (isTestSms && (pipeResult.stages?.stage3?.status === 'PARSED' || pipeResult.amountPaise)) {
       ctx.db.execute("UPDATE android_devices SET last_observation_at = datetime('now') WHERE id = ?", [deviceId]);
+
+      // Resolve in-flight active or processing session to attribute this test payment to
+      let targetSession = null;
+      if (body.paymentSessionId) {
+        targetSession = ctx.sessionRepo.findById(body.paymentSessionId);
+      }
+      if (!targetSession && receivingAccountId) {
+        targetSession = ctx.sessionRepo.findCurrentActiveOrProcessing(receivingAccountId);
+      }
+      if (!targetSession && device?.merchant_id) {
+        targetSession = ctx.sessionRepo.findCurrentActiveOrProcessingForMerchant(device.merchant_id);
+      }
+      if (!targetSession) {
+        const activeRow = ctx.db.queryOne(
+          "SELECT * FROM payment_sessions WHERE status IN ('ACTIVE', 'PROCESSING') ORDER BY created_at DESC LIMIT 1"
+        );
+        if (activeRow) targetSession = ctx.sessionRepo.mapRow(activeRow);
+      }
+
+      const now = new Date().toISOString();
+      const obsId = pipeResult.messageId || `OBS-${crypto.randomUUID().slice(0, 8)}`;
+      const bankRefNumber = pipeResult.reference || '999888777666';
+      const merchantId = targetSession?.merchantId || targetSession?.merchant_id || device?.merchant_id || '00000000-0000-0000-0000-000000000001';
+
+      if (targetSession) {
+        // Record in payment_observations
+        try {
+          const fingerprint = crypto.createHash('sha256').update(`SMS:${bankRefNumber}:${targetSession.id}`).digest('hex');
+          ctx.db.execute(`
+            INSERT OR REPLACE INTO payment_observations (
+              id, receiving_account_id, source, amount_paise, observed_at, ingested_at,
+              bank_reference_number, fingerprint_hash, raw_payload, attribution_status,
+              attributed_payment_id, created_at
+            ) VALUES (?, ?, 'SMS', ?, ?, ?, ?, ?, ?, 'ATTRIBUTED', ?, ?)
+          `, [
+            obsId,
+            targetSession.receivingAccountId || targetSession.receiving_account_id || receivingAccountId,
+            targetSession.amountPaise || targetSession.amount_paise,
+            now, now,
+            bankRefNumber,
+            fingerprint,
+            JSON.stringify({ raw: rawText, sender: pipeResult.sender || 'HDFCBK', isTest: true }),
+            targetSession.id,
+            now
+          ]);
+        } catch (obsErr) {
+          console.warn('[Test Dispatch] Observation error:', obsErr?.message);
+        }
+
+        // Transition session to SUCCESS in DB
+        ctx.db.execute(`
+          UPDATE payment_sessions
+          SET status = 'SUCCESS',
+              verification_level = 1,
+              verification_tag = 'Bank SMS Verified',
+              verification_sources = json_array('SMS'),
+              attributed_observation_id = ?,
+              completed_at = ?
+          WHERE id = ? AND status IN ('INITIATED', 'QUEUED', 'ACTIVE', 'PROCESSING')
+        `, [obsId, now, targetSession.id]);
+
+        // Broadcast SSE so customer checkout screen turns green immediately
+        server.broadcastSse(targetSession.id, 'status_change', {
+          status: 'SUCCESS',
+          verificationLevel: 1,
+          verificationTag: 'Bank SMS Verified',
+          sources: ['SMS'],
+          orderId: targetSession.orderId || targetSession.order_id,
+          utr: bankRefNumber
+        });
+
+        // Emit PAYMENT.SUCCESS so webhooks dispatch and queues update
+        if (ctx.eventEmitter) {
+          ctx.eventEmitter.emit('PAYMENT.SUCCESS', {
+            paymentId: targetSession.id,
+            orderId: targetSession.orderId || targetSession.order_id,
+            merchantId,
+            amountPaise: targetSession.amountPaise || targetSession.amount_paise,
+            observationId: obsId,
+            verificationLevel: 1,
+            verificationTag: 'Bank SMS Verified',
+            sources: ['SMS']
+          });
+        }
+
+        // Log to audit trail
+        if (ctx.auditRepo) {
+          ctx.auditRepo.log({
+            merchantId,
+            entityType: 'TEST_OBSERVATION',
+            entityId: targetSession.id,
+            action: 'TEST_OBSERVATION_INJECTED',
+            actorType: 'OBSERVER',
+            details: {
+              source: 'SMS',
+              amount: pipeResult.amount || (Number(targetSession.amountPaise || targetSession.amount_paise) / 100).toFixed(2),
+              amountPaise: targetSession.amountPaise || targetSession.amount_paise,
+              refId: bankRefNumber,
+              sender: pipeResult.sender || 'HDFCBK',
+              raw: rawText,
+              outcomeStatus: 'VERIFIED',
+              testMessageId: obsId,
+              attributedOrderId: targetSession.orderId || targetSession.order_id
+            }
+          });
+        }
+
+        HttpServer.json(res, 200, {
+          accepted: true,
+          isTest: true,
+          status: 'VERIFIED',
+          paymentId: targetSession.id,
+          attributedOrderId: targetSession.orderId || targetSession.order_id,
+          event: {
+            amountPaise: targetSession.amountPaise || targetSession.amount_paise,
+            refId: bankRefNumber,
+            sender: pipeResult.sender || 'HDFCBK'
+          },
+          message: `Test SMS verified and attributed to Order #${targetSession.orderId || targetSession.order_id}!`,
+          pipeline: pipeResult
+        });
+        return;
+      }
+
+      // If no active session was waiting, log to audit trail and record unattributed observation
+      try {
+        const fingerprint = crypto.createHash('sha256').update(`SMS:${bankRefNumber}:${obsId}`).digest('hex');
+        ctx.db.execute(`
+          INSERT OR REPLACE INTO payment_observations (
+            id, receiving_account_id, source, amount_paise, observed_at, ingested_at,
+            bank_reference_number, fingerprint_hash, raw_payload, attribution_status,
+            created_at
+          ) VALUES (?, ?, 'SMS', ?, ?, ?, ?, ?, ?, 'UNATTRIBUTED', ?)
+        `, [
+          obsId,
+          receivingAccountId,
+          pipeResult.amountPaise || 50000,
+          now, now,
+          bankRefNumber,
+          fingerprint,
+          JSON.stringify({ raw: rawText, sender: pipeResult.sender || 'HDFCBK', isTest: true }),
+          now
+        ]);
+      } catch {}
+
+      if (ctx.auditRepo) {
+        ctx.auditRepo.log({
+          merchantId,
+          entityType: 'TEST_OBSERVATION',
+          entityId: obsId,
+          action: 'TEST_OBSERVATION_INJECTED',
+          actorType: 'OBSERVER',
+          details: {
+            source: 'SMS',
+            amount: pipeResult.amount || '500.00',
+            amountPaise: pipeResult.amountPaise || 50000,
+            refId: bankRefNumber,
+            sender: pipeResult.sender || 'HDFCBK',
+            raw: rawText,
+            outcomeStatus: 'UNATTRIBUTED',
+            testMessageId: obsId
+          }
+        });
+      }
+
       HttpServer.json(res, 200, {
         accepted: true,
         isTest: true,
         status: 'PARSED_SUCCESS',
         event: {
           amountPaise: pipeResult.amountPaise,
-          refId: pipeResult.reference,
+          refId: bankRefNumber,
           sender: pipeResult.sender,
           parsedAmount: pipeResult.amount
         },
-        message: 'Test SMS parsed successfully by 6-stage engine!',
+        message: 'Test SMS parsed and recorded to audit trail (no active checkout session waiting).',
         pipeline: pipeResult
       });
       return;
