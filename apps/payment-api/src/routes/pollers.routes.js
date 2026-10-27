@@ -469,6 +469,24 @@ export function registerPollerRoutes(server, ctx) {
       return;
     }
 
+    // If this is an Admin Dashboard test dispatch and parser succeeded, return 200 with parsed event
+    if (isAdminTest && (pipeResult.stages?.stage3?.status === 'PARSED' || pipeResult.amountPaise)) {
+      HttpServer.json(res, 200, {
+        accepted: true,
+        isTest: true,
+        status: 'PARSED_SUCCESS',
+        event: {
+          amountPaise: pipeResult.amountPaise,
+          refId: pipeResult.reference,
+          sender: pipeResult.sender,
+          parsedAmount: pipeResult.amount
+        },
+        message: 'Test SMS parsed successfully by 6-stage engine!',
+        pipeline: pipeResult
+      });
+      return;
+    }
+
     // Invert check: if status is not VERIFIED, return 4xx and NEVER fall through to direct attribution
     ctx.db.execute("UPDATE android_devices SET last_observation_at = datetime('now') WHERE id = ?", [deviceId]);
     HttpServer.json(res, 400, {
