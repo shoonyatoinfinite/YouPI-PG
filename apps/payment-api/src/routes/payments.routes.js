@@ -272,8 +272,32 @@ export function registerPaymentRoutes(server, ctx) {
     // Resolve customer if provided (optional pre-existing customer)
     let customerId = body.customerId || null;
     if (!customerId && (body.customer?.mobileNumber || body.customer?.phoneNumber || body.customer?.email) && ctx.customerRepo) {
-      const ident = body.customer.email || body.customer.mobileNumber || body.customer.phoneNumber;
-      const existingCust = ctx.customerRepo.findByIdentifier(ident);
+      const mobile = (body.customer?.mobileNumber || body.customer?.phoneNumber || '').toString().trim();
+      const email = (body.customer?.email || '').toString().trim();
+      let existingCust = null;
+      if (mobile) {
+        existingCust = ctx.customerRepo.findByMobile(mobile) || ctx.customerRepo.findByIdentifier(mobile);
+      }
+      if (!existingCust && email) {
+        existingCust = ctx.customerRepo.findByEmail(email) || ctx.customerRepo.findByIdentifier(email);
+      }
+      if (!existingCust && mobile) {
+        try {
+          const cleanMobile = mobile.replace(/\D/g, '').slice(-10);
+          if (cleanMobile.length === 10) {
+            const resolvedName = (body.customer?.name || ('Customer ' + cleanMobile.slice(-4))).trim();
+            const resolvedEmail = email && email.includes('@') ? email : (cleanMobile + '@customer.youpi.local');
+            existingCust = ctx.customerRepo.create({
+              name: resolvedName,
+              email: resolvedEmail,
+              mobileNumber: cleanMobile,
+              isPhoneVerified: Boolean(isCustomerVerified)
+            });
+          }
+        } catch {
+          existingCust = ctx.customerRepo.findByMobile(mobile);
+        }
+      }
       if (existingCust) {
         customerId = existingCust.id;
       }
@@ -426,6 +450,19 @@ export function registerPaymentRoutes(server, ctx) {
     if (!isPaymentOwner(req, session, ctx) && !isAdminRequest(req)) {
       HttpServer.json(res, 401, { error: 'Unauthorized', code: 'AUTH_REQUIRED' });
       return;
+    }
+
+    const body = await HttpServer.parseBody(req).catch(() => ({}));
+    if (!session.customerId && (body.customerId || body.customerPhone || body.customer?.mobileNumber || body.customer?.phoneNumber)) {
+      const mobile = body.customerPhone || body.customer?.mobileNumber || body.customer?.phoneNumber;
+      let cust = body.customerId && ctx.customerRepo ? ctx.customerRepo.findById(body.customerId) : null;
+      if (!cust && mobile && ctx.customerRepo) {
+        cust = ctx.customerRepo.findByMobile(mobile) || ctx.customerRepo.findByIdentifier(mobile);
+      }
+      if (cust) {
+        ctx.db.execute('UPDATE payment_sessions SET customer_id = ?, updated_at = ? WHERE id = ?', [cust.id, new Date().toISOString(), session.id]);
+        session.customerId = cust.id;
+      }
     }
 
     if (session.status === PaymentStatus.ACTIVE || session.status === PaymentStatus.PROCESSING) {
