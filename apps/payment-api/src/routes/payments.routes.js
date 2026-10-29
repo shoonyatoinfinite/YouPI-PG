@@ -103,8 +103,9 @@ export function registerPaymentRoutes(server, ctx) {
     }
     const requestedCurrency = (body.currency || 'INR').toUpperCase();
 
+    const isCustomerVerified = body.customerVerified === true || body.customerVerified === 'true';
     const isExplicitTestAutoActivate = body.autoActivate === true || body.autoActivate === 'true';
-    if (isExplicitTestAutoActivate) {
+    if (isExplicitTestAutoActivate && !isCustomerVerified) {
       const autoActivateAllowed =
         process.env.NODE_ENV === 'test' ||
         process.env.ALLOW_TEST_AUTOACTIVATE === 'true' ||
@@ -316,7 +317,7 @@ export function registerPaymentRoutes(server, ctx) {
     // Digital UPI payments MUST ALWAYS start in status INITIATED without acquiring a concurrency slot or timer.
     // Only physical counter payments (CASH_COUNTER, CARD_COUNTER) start as ACTIVE (they do not use UPI slots).
     // The only exception for UPI auto-activation is explicit developer test suite flag: body.autoActivate === true.
-    const shouldActivateNow = isCounterPayment || isExplicitTestAutoActivate;
+    const shouldActivateNow = isCounterPayment || isExplicitTestAutoActivate || isCustomerVerified;
     const initialStatus = isCounterPayment ? PaymentStatus.ACTIVE : PaymentStatus.INITIATED;
 
     const sessionMetadata = {
@@ -411,6 +412,66 @@ export function registerPaymentRoutes(server, ctx) {
       verificationTag: session.verificationTag || 'UNVERIFIED',
       returnUrl: session.returnUrl,
       metadata: session.metadata
+    });
+  });
+
+  // POST /api/v1/payments/:id/activate (Explicit Activation of Initiated Session by Owner or Admin)
+  server.post('/api/v1/payments/:id/activate', async (req, res, params) => {
+    const session = ctx.sessionRepo.findById(params.id);
+    if (!session) {
+      HttpServer.json(res, 404, { error: `Payment session not found: ${params.id}` });
+      return;
+    }
+
+    if (!isPaymentOwner(req, session, ctx) && !isAdminRequest(req)) {
+      HttpServer.json(res, 401, { error: 'Unauthorized', code: 'AUTH_REQUIRED' });
+      return;
+    }
+
+    if (session.status === PaymentStatus.ACTIVE || session.status === PaymentStatus.PROCESSING) {
+      HttpServer.json(res, 200, {
+        success: true,
+        status: session.status,
+        paymentId: session.id,
+        orderId: session.orderId,
+        alreadyActive: true
+      });
+      return;
+    }
+
+    const targetAccountId =
+      session.receivingAccountId ||
+      ctx.accountRepo?.findActiveForMerchant(session.merchantId)?.id ||
+      session.metadata?.receivingAccountSnapshot?.id;
+
+    if (!targetAccountId) {
+      HttpServer.json(res, 500, { error: 'No active receiving account available to activate session.' });
+      return;
+    }
+
+    const queueResult = ctx.queueEngine.enqueueOrActivate(session.id, targetAccountId);
+    if (queueResult.expiresAt && ctx.timingEngine) {
+      ctx.timingEngine.startActiveTimer(session.id, queueResult.expiresAt);
+    }
+    server.broadcastSse(session.id, 'status_change', {
+      status: queueResult.status,
+      queuePosition: queueResult.queuePosition,
+      expiresAt: queueResult.expiresAt
+    });
+    server.broadcastSse('admin_counter_events', 'status_change', {
+      status: queueResult.status,
+      sessionId: session.id,
+      orderId: session.orderId,
+      amountPaise: session.amountPaise ? session.amountPaise.toString() : '0'
+    });
+
+    HttpServer.json(res, 200, {
+      success: true,
+      status: queueResult.status,
+      paymentId: session.id,
+      orderId: session.orderId,
+      queuePosition: queueResult.queuePosition,
+      expiresAt: queueResult.expiresAt
     });
   });
 
