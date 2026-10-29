@@ -1610,19 +1610,21 @@ export function registerAdminRoutes(server, ctx) {
 
     // Auto-notify observer poller to pick up new credentials immediately
     try {
-      const observerPort = process.env.GMAIL_OBSERVER_PORT || 6003;
-      if (updatedGmail.imapUser && updatedGmail.imapPassword) {
-        await fetch(`http://127.0.0.1:${observerPort}/api/imap/start`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${getObserverToken()}`
-          },
-          body: JSON.stringify({
-            user: updatedGmail.imapUser,
-            pass: updatedGmail.imapPassword
-          })
-        }).catch(() => {});
+      const ports = Array.from(new Set([process.env.PORT, process.env.GMAIL_OBSERVER_PORT, 6003].filter(Boolean)));
+      for (const p of ports) {
+        if (updatedGmail.imapUser && updatedGmail.imapPassword) {
+          fetch(`http://127.0.0.1:${p}/api/imap/start`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${getObserverToken()}`
+            },
+            body: JSON.stringify({
+              user: updatedGmail.imapUser,
+              pass: updatedGmail.imapPassword
+            })
+          }).catch(() => {});
+        }
       }
     } catch {}
 
@@ -1672,8 +1674,36 @@ export function registerAdminRoutes(server, ctx) {
         return;
       }
 
+      // 1. Direct in-process IMAP test via ImapEmailPoller (100% reliable, zero port/network issues)
       try {
-        const observerPort = process.env.GMAIL_OBSERVER_PORT || 6003;
+        const { ImapEmailPoller } = await import('../../../gmail-observer/src/imap-poller.js');
+        if (ImapEmailPoller && typeof ImapEmailPoller.testConnection === 'function') {
+          const directResult = await ImapEmailPoller.testConnection({ user: imapUser, pass: imapPassword });
+          if (directResult.success) {
+            HttpServer.json(res, 200, {
+              success: true,
+              message: 'IMAP connection to Google Mail server verified successfully.',
+              connectedEmail: directResult.connectedEmail || imapUser,
+              inboxTotal: directResult.inboxTotal,
+              unseenCount: directResult.unseenCount,
+              testedAt: new Date().toISOString()
+            });
+            return;
+          } else {
+            HttpServer.json(res, 400, {
+              success: false,
+              error: directResult.error || 'IMAP authentication failed. Please ensure 2-Step Verification is enabled and you are using a 16-character Google App Password.'
+            });
+            return;
+          }
+        }
+      } catch (directErr) {
+        // Fallback to HTTP observer request below
+      }
+
+      // 2. HTTP Observer fallback
+      try {
+        const observerPort = process.env.PORT || process.env.GMAIL_OBSERVER_PORT || 6003;
         const testRes = await fetch(`http://127.0.0.1:${observerPort}/api/imap/test`, {
           method: 'POST',
           headers: {
