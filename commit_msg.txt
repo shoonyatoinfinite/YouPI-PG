@@ -1,6 +1,0 @@
-feat(whatsapp): add dedicated send-payment-qr customer endpoint and allow storefront WhatsApp messaging
-
-- Added POST /api/v1/customer/send-payment-qr endpoint for direct storefront payment QR dispatch
-- Added sendImage method to WhatsAppBerryService for direct image QR delivery in WhatsApp chats
-- Whitelisted /api/v1/admin/whatsapp/test-message in PUBLIC_ADMIN_PATHS to prevent 401 Unauthorized errors from storefront
-- Added regression tests for payment QR dispatch
