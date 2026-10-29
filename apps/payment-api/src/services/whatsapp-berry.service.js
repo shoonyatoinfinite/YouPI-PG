@@ -637,6 +637,76 @@ export class WhatsAppBerryService extends EventEmitter {
   }
 
   /**
+   * Dispatches an image with caption via BerryProtocol
+   * @param {string} to
+   * @param {string | Buffer} imageUrlOrBuffer URL string, data URI, or Buffer
+   * @param {string} [caption]
+   */
+  async sendImage(to, imageUrlOrBuffer, caption = '') {
+    const cleanTo = String(to || '').replace(/[^0-9]/g, '');
+    const dummyPrefixes = ['910000000000', '0000000000', '919999999999'];
+    const isDummy = dummyPrefixes.some(prefix => cleanTo.startsWith(prefix));
+
+    if (isDummy || (process.env.NODE_ENV === 'test' && !this.forceRealDispatch)) {
+      console.log(`[WhatsAppBerryService] Test guardrail: Simulated Image message to ${to}`);
+      return {
+        success: true,
+        delivered: true,
+        simulated: true,
+        mode: 'mock_test_safeguard',
+        id: `msg_img_${Date.now()}`
+      };
+    }
+
+    if (!this.client || this.status !== 'CONNECTED') {
+      return this.sendMessage(to, caption);
+    }
+
+    const jid = this.formatJid(to);
+    if (!jid) {
+      return { success: false, delivered: false, error: `Invalid recipient phone number: ${to}` };
+    }
+
+    try {
+      let imagePayload;
+      if (typeof imageUrlOrBuffer === 'string') {
+        if (imageUrlOrBuffer.startsWith('data:image/')) {
+          const parts = imageUrlOrBuffer.split(',');
+          const base64Data = parts[1] || parts[0];
+          imagePayload = { image: Buffer.from(base64Data, 'base64'), caption };
+        } else {
+          imagePayload = { image: { url: imageUrlOrBuffer }, caption };
+        }
+      } else if (Buffer.isBuffer(imageUrlOrBuffer)) {
+        imagePayload = { image: imageUrlOrBuffer, caption };
+      } else {
+        return this.sendMessage(to, caption);
+      }
+
+      let result;
+      if (typeof this.client.sendMessage === 'function') {
+        result = await this.client.sendMessage(jid, imagePayload);
+      } else if (this.client.socket && typeof this.client.socket.sendMessage === 'function') {
+        result = await this.client.socket.sendMessage(jid, imagePayload);
+      } else {
+        return this.sendMessage(to, caption);
+      }
+
+      console.log(`[WhatsAppBerryService] Outbound WhatsApp image delivered to ${jid} (ID: ${result?.id || 'sent'})`);
+      return {
+        success: true,
+        delivered: true,
+        id: result?.id || `berry_img_${Date.now()}`,
+        status: this.status,
+        result
+      };
+    } catch (err) {
+      console.warn(`[WhatsAppBerryService] Image send failed (${err.message}), falling back to text message`);
+      return this.sendMessage(to, caption);
+    }
+  }
+
+  /**
    * Universal message sender via BerryProtocol
    * @param {string} to
    * @param {string} message

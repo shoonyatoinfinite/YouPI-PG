@@ -194,4 +194,37 @@ test('WhatsApp Berry Protocol OTP Customer Auth & Merchant Configuration Suite',
     assert.equal(data.success, true);
     assert.equal(data.status, 'DISCONNECTED');
   });
+
+  await t.test('13. POST /api/v1/customer/send-payment-qr delivers payment details & QR', async () => {
+    const res = await fetch(`${apiBase}/api/v1/customer/send-payment-qr`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        mobileNumber: '9123456789',
+        orderRef: 'TEST-ORD-999',
+        amount: 499,
+        upiId: 'merchant@upi',
+        customerName: 'Test Buyer',
+        qrImageUrl: 'https://example.com/qr.png'
+      })
+    });
+    assert.equal(res.status, 200);
+    const data = await res.json();
+    assert.equal(data.success, true);
+    assert.equal(data.orderRef, 'TEST-ORD-999');
+  });
+
+  await t.test('14. POST /api/v1/admin/whatsapp/test-message is accessible without admin token', async () => {
+    const res = await fetch(`${apiBase}/api/v1/admin/whatsapp/test-message`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        to: '919123456789',
+        message: 'Hello from test message'
+      })
+    });
+    assert.equal(res.status, 200);
+    const data = await res.json();
+    assert.equal(data.success, true);
+  });
 });

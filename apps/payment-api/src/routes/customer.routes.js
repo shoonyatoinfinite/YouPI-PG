@@ -401,6 +401,90 @@ export function registerCustomerRoutes(server, ctx) {
     });
   });
 
+  // 3b. POST /api/v1/customer/send-payment-qr
+  // Dispatches payment QR code & transactional UPI details to customer's WhatsApp
+  server.post('/api/v1/customer/send-payment-qr', async (req, res) => {
+    const body = await HttpServer.parseBody(req).catch(() => ({}));
+    const rawMobile = body.mobileNumber || body.phoneNumber || body.mobile || body.phone || body.to;
+    const orderRef = String(body.orderRef || body.orderId || '').trim();
+    const amount = body.amount !== undefined ? Number(body.amount) : 0;
+    const upiId = String(body.upiId || 'shreeshyam@upi').trim();
+    const customerName = String(body.customerName || body.name || 'Customer').trim();
+    const qrImageUrl = String(body.qrImageUrl || '').trim();
+    const upiIntentUri = String(body.upiIntentUri || '').trim();
+    const customMessage = body.message ? String(body.message) : '';
+
+    if (!rawMobile) {
+      HttpServer.json(res, 400, { error: 'Mobile number is required.' });
+      return;
+    }
+
+    const cleanMobile = normalizeMobile(rawMobile);
+    if (!cleanMobile || !isValidMobile(cleanMobile)) {
+      HttpServer.json(res, 400, { error: 'Please enter a valid 10-digit mobile number.' });
+      return;
+    }
+
+    const berry = getBerry();
+    if (!berry) {
+      HttpServer.json(res, 503, {
+        success: false,
+        delivered: false,
+        error: 'WhatsApp Berry service is not initialized on gateway.'
+      });
+      return;
+    }
+
+    const formattedAmount = (amount || 0).toFixed(2);
+    let messageText = customMessage;
+
+    if (!messageText) {
+      messageText =
+        `🍬 *Mithaasé — UPI Payment QR & Details*\n\n` +
+        `Hello *${customerName || 'Customer'}*! Here are your payment details:\n\n` +
+        `📦 *Order Ref:* ${orderRef || 'MTH-ORDER'}\n` +
+        `💰 *Exact Amount:* ₹${formattedAmount}\n` +
+        `💳 *UPI ID:* ${upiId}\n` +
+        `⏳ *Time Limit:* Pay within 10 minutes\n\n` +
+        `⚠️ *Important:* Please transfer the exact amount of *₹${formattedAmount}* for automated bank verification.\n\n` +
+        (qrImageUrl ? `🖼️ *Direct QR Code Image:* \n👉 ${qrImageUrl}\n\n` : '') +
+        (upiIntentUri ? `⚡ *1-Tap Pay via UPI App (GPay, PhonePe, Paytm, CRED):* \n👉 ${upiIntentUri}\n\n` : '') +
+        `— *Shree Shyam Sweets (Mithaasé)*`;
+    }
+
+    try {
+      let dispatchResult;
+      // Try sending with embedded image if qrImageUrl is provided and berry supports image sending
+      if (qrImageUrl && typeof berry.sendImage === 'function') {
+        try {
+          dispatchResult = await berry.sendImage(cleanMobile, qrImageUrl, messageText);
+        } catch (imgErr) {
+          console.warn('[Customer Payment QR] Image send fallback to text:', imgErr.message);
+          dispatchResult = await berry.sendMessage(cleanMobile, messageText);
+        }
+      } else {
+        dispatchResult = await berry.sendMessage(cleanMobile, messageText);
+      }
+
+      const isDelivered = Boolean(dispatchResult?.delivered || dispatchResult?.success);
+      HttpServer.json(res, 200, {
+        success: true,
+        delivered: isDelivered,
+        mobileNumber: cleanMobile,
+        orderRef,
+        status: berry.status,
+        dispatch: dispatchResult
+      });
+    } catch (err) {
+      console.error('[Customer Payment QR] Send error:', err.message);
+      HttpServer.json(res, 500, {
+        success: false,
+        delivered: false,
+        error: err.message || 'Failed to dispatch WhatsApp message.'
+      });
+    }
+  });
+
   // POST /api/v1/customer/register (Gateway-owned Sign Up)
   // Input: exactly name, email, mobileNumber, password
   server.post('/api/v1/customer/register', async (req, res) => {

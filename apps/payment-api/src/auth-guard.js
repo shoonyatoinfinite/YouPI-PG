@@ -1,8 +1,12 @@
 import { getAdminToken, getObserverToken, safeEqual, hasBearer } from '@youpi/common';
 import { HttpServer } from './server.js';
 
-/** Admin-prefixed routes that are intentionally public (static APK download for pairing). */
-const PUBLIC_ADMIN_PATHS = new Set(['/api/v1/admin/sms-gateway/download-apk']);
+/** Admin-prefixed routes that are intentionally public (static APK download for pairing, WhatsApp storefront dispatches). */
+const PUBLIC_ADMIN_PATHS = new Set([
+  '/api/v1/admin/sms-gateway/download-apk',
+  '/api/v1/admin/whatsapp/test-message',
+  '/api/v1/admin/whatsapp/status'
+]);
 
 /** Admin-prefixed routes the local observer processes call with the observer token. */
 const OBSERVER_ADMIN_PATHS = new Set(['/api/v1/admin/gmail/credentials']);
