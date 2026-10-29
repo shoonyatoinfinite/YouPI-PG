@@ -1676,7 +1676,16 @@ export function registerAdminRoutes(server, ctx) {
 
       // 1. Direct in-process IMAP test via ImapEmailPoller (100% reliable, zero port/network issues)
       try {
-        const { ImapEmailPoller } = await import('../../../gmail-observer/src/imap-poller.js');
+        let ImapEmailPoller = null;
+        try {
+          const mod = await import('../../../gmail-observer/src/imap-poller.js');
+          ImapEmailPoller = mod.ImapEmailPoller;
+        } catch {
+          const fileUrl = new URL('../../../gmail-observer/src/imap-poller.js', import.meta.url).href;
+          const mod = await import(fileUrl);
+          ImapEmailPoller = mod.ImapEmailPoller;
+        }
+
         if (ImapEmailPoller && typeof ImapEmailPoller.testConnection === 'function') {
           const directResult = await ImapEmailPoller.testConnection({ user: imapUser, pass: imapPassword });
           if (directResult.success) {
@@ -1698,6 +1707,7 @@ export function registerAdminRoutes(server, ctx) {
           }
         }
       } catch (directErr) {
+        console.warn('[AdminRoutes] Direct IMAP test exception:', directErr?.message);
         // Fallback to HTTP observer request below
       }
 
@@ -1731,6 +1741,32 @@ export function registerAdminRoutes(server, ctx) {
           return;
         }
       } catch (e) {
+        // Last-resort fallback to direct IMAP test if HTTP observer is unreachable
+        try {
+          const fileUrl = new URL('../../../gmail-observer/src/imap-poller.js', import.meta.url).href;
+          const { ImapEmailPoller } = await import(fileUrl);
+          if (ImapEmailPoller && typeof ImapEmailPoller.testConnection === 'function') {
+            const finalResult = await ImapEmailPoller.testConnection({ user: imapUser, pass: imapPassword });
+            if (finalResult.success) {
+              HttpServer.json(res, 200, {
+                success: true,
+                message: 'IMAP connection to Google Mail server verified successfully.',
+                connectedEmail: finalResult.connectedEmail || imapUser,
+                inboxTotal: finalResult.inboxTotal,
+                unseenCount: finalResult.unseenCount,
+                testedAt: new Date().toISOString()
+              });
+              return;
+            } else {
+              HttpServer.json(res, 400, {
+                success: false,
+                error: finalResult.error || 'IMAP authentication failed. Please ensure 2-Step Verification is enabled and you are using a 16-character Google App Password.'
+              });
+              return;
+            }
+          }
+        } catch {}
+
         HttpServer.json(res, 500, {
           success: false,
           error: `Failed to contact IMAP observer service: ${e.message}`
