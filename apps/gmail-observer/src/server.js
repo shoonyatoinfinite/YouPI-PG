@@ -2,6 +2,7 @@ import http from 'node:http';
 import { hasBearer, getObserverToken, getAdminToken, createOAuthState, consumeOAuthState, resolveGmailRedirectUri } from '@youpi/common';
 import { GmailPoller } from './gmail-poller.js';
 import { GmailBrowserAutomator } from './browser-automator.js';
+import { ImapEmailPoller } from './imap-poller.js';
 
 export class GmailObserverServer {
   /**
@@ -14,6 +15,7 @@ export class GmailObserverServer {
   constructor(options = {}) {
     this.poller = options.poller || new GmailPoller(options);
     this.automator = new GmailBrowserAutomator({ gmailPoller: this.poller });
+    this.imapPoller = options.imapPoller || new ImapEmailPoller(options);
   }
 
   createServer() {
@@ -38,9 +40,23 @@ export class GmailObserverServer {
         res.end(JSON.stringify({
           status: 'UP',
           service: 'gmail-observer',
-          isRunning: this.poller.isRunning,
-          lastPollAt: this.poller.lastPollAt,
-          observedCount: this.poller.observedCount
+          isRunning: this.poller.isRunning || this.imapPoller.isRunning,
+          lastPollAt: this.imapPoller.lastPollAt || this.poller.lastPollAt,
+          observedCount: this.poller.observedCount + this.imapPoller.observedCount,
+          activeMode: this.imapPoller.isRunning ? 'IMAP_APP_PASSWORD' : (this.poller.isRunning ? 'GMAIL_OAUTH' : 'STANDBY'),
+          oauthPoller: {
+            isRunning: this.poller.isRunning,
+            lastPollAt: this.poller.lastPollAt,
+            observedCount: this.poller.observedCount
+          },
+          imapPoller: {
+            isRunning: this.imapPoller.isRunning,
+            isConnected: this.imapPoller.isConnected,
+            lastPollAt: this.imapPoller.lastPollAt,
+            observedCount: this.imapPoller.observedCount,
+            lastError: this.imapPoller.lastError,
+            connectedEmail: this.imapPoller.credentials?.user || null
+          }
         }));
         return;
       }
@@ -56,8 +72,69 @@ export class GmailObserverServer {
           return;
         }
         this.poller.stop();
+        this.imapPoller.stop();
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ success: true, message: 'Gmail poller stopped' }));
+        res.end(JSON.stringify({ success: true, message: 'All email observers stopped' }));
+        return;
+      }
+
+      // POST /api/imap/test (Test IMAP credentials safely without persisting)
+      if (pathname === '/api/imap/test' && method === 'POST') {
+        if (!hasBearer(req, getObserverToken(), getAdminToken())) {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Unauthorized', code: 'AUTH_REQUIRED' }));
+          return;
+        }
+        let body = '';
+        req.on('data', chunk => { body += chunk; });
+        req.on('end', async () => {
+          try {
+            const data = JSON.parse(body || '{}');
+            const user = data.user || data.imapUser || this.imapPoller.credentials.user;
+            const pass = data.pass || data.imapPassword || this.imapPoller.credentials.pass;
+            const testResult = await ImapEmailPoller.testConnection({
+              user,
+              pass,
+              host: data.host,
+              port: data.port
+            });
+            res.writeHead(testResult.success ? 200 : 400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(testResult));
+          } catch (e) {
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: e.message }));
+          }
+        });
+        return;
+      }
+
+      // POST /api/imap/start (Start IMAP background polling)
+      if (pathname === '/api/imap/start' && method === 'POST') {
+        if (!hasBearer(req, getObserverToken(), getAdminToken())) {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Unauthorized', code: 'AUTH_REQUIRED' }));
+          return;
+        }
+        let body = '';
+        req.on('data', chunk => { body += chunk; });
+        req.on('end', async () => {
+          try {
+            const data = JSON.parse(body || '{}');
+            if (data.user && data.pass) {
+              this.imapPoller.setCredentials({ user: data.user, pass: data.pass });
+            }
+            this.imapPoller.start();
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+              success: true,
+              message: 'IMAP bank email observer started',
+              connectedEmail: this.imapPoller.credentials.user
+            }));
+          } catch (e) {
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: e.message }));
+          }
+        });
         return;
       }
 

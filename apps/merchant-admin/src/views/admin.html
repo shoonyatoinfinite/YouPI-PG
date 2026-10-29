@@ -3139,6 +3139,58 @@
             <div id="gmailTestResultBox"
               style="display:none; padding:0.85rem; border-radius:0.5rem; font-size:0.82rem; margin-bottom:1rem;"></div>
 
+            <!-- Google App Password / IMAP Integration Box -->
+            <div style="background:rgba(30,41,59,0.5); border:1px solid #334155; border-radius:0.75rem; padding:1.25rem; margin-bottom:1.25rem;">
+              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.75rem;">
+                <div style="display:flex; align-items:center; gap:0.5rem;">
+                  <span style="font-size:1.1rem;">⚡</span>
+                  <strong style="color:#f8fafc; font-size:0.95rem;">Instant Setup: Connect via Google App Password</strong>
+                  <span class="badge badge-success" style="font-size:0.7rem;">RECOMMENDED</span>
+                </div>
+              </div>
+              <p style="color:#94a3b8; font-size:0.82rem; margin:0 0 1rem 0; line-height:1.4;">
+                Connect securely without creating a Google Cloud Developer project or dealing with OAuth consent screens. Generates a 16-character isolated password directly from your Google Account.
+              </p>
+
+              <div style="display:grid; grid-template-columns:1fr 1fr; gap:0.75rem; margin-bottom:0.85rem;">
+                <div>
+                  <label style="display:block; font-size:0.75rem; font-weight:700; color:var(--text-muted); margin-bottom:0.25rem;">Bank-Registered Gmail Address</label>
+                  <input type="email" id="imapUserInput" placeholder="e.g. billing@yourbrand.com or name@gmail.com" style="width:100%; font-size:0.82rem;" />
+                </div>
+                <div>
+                  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.25rem;">
+                    <label style="font-size:0.75rem; font-weight:700; color:var(--text-muted);">16-Character Google App Password</label>
+                    <button type="button" class="btn btn-secondary" style="font-size:0.65rem; padding:0.1rem 0.35rem;" onclick="toggleImapPasswordVisibility()">👁️ Show/Hide</button>
+                  </div>
+                  <input type="password" id="imapPasswordInput" placeholder="xxxx yyyy zzzz wwww" style="width:100%; font-family:monospace; font-size:0.82rem;" />
+                </div>
+              </div>
+
+              <!-- Security & Privacy Guarantee Card -->
+              <div style="background:rgba(16,185,129,0.06); border:1px solid rgba(16,185,129,0.2); border-radius:0.5rem; padding:0.75rem; font-size:0.78rem; color:#a7f3d0; margin-bottom:1rem; line-height:1.45;">
+                <div style="font-weight:700; display:flex; align-items:center; gap:0.35rem; margin-bottom:0.3rem;">
+                  <span>🔒</span> Bank-Grade Privacy &amp; Security Protections:
+                </div>
+                <div style="color:#d1fae5; font-size:0.76rem;">
+                  • <strong>Isolated Token:</strong> Google App Passwords strictly only grant access to email reception. They <strong>cannot</strong> be used to log in on the web, access Google Drive, Google Photos, Contacts, or Account Settings.<br/>
+                  • <strong>Bank Emails Only:</strong> The background engine exclusively scans for incoming credit alerts matching Indian bank patterns (HDFC, ICICI, SBI, Axis, Kotak, Paytm). All personal and non-banking emails are completely ignored and never downloaded or stored.<br/>
+                  • <strong>Revocable Anytime:</strong> You can delete this App Password in 1 click at any time from your Google Account Security settings.
+                </div>
+              </div>
+
+              <div style="display:flex; gap:0.6rem; align-items:center; flex-wrap:wrap;">
+                <button type="button" class="btn btn-primary" onclick="saveAndStartImap()" style="padding:0.5rem 1rem; font-size:0.82rem; font-weight:700; background:#059669;">
+                  💾 Save &amp; Activate Observer
+                </button>
+                <button type="button" class="btn btn-secondary" onclick="testImapConnectionDirect()" style="padding:0.5rem 0.9rem; font-size:0.82rem;">
+                  🔍 Test Connection
+                </button>
+                <a href="https://myaccount.google.com/apppasswords" target="_blank" class="btn btn-secondary" style="padding:0.5rem 0.85rem; font-size:0.78rem; text-decoration:none; display:inline-flex; align-items:center; gap:0.3rem;">
+                  ↗ How to Create App Password
+                </a>
+              </div>
+            </div>
+
             <!-- Advanced Collapsible Configuration -->
             <details
               style="background:rgba(15,23,42,0.4); border:1px solid #1e293b; border-radius:0.5rem; padding:0.6rem 0.85rem;">
@@ -5659,7 +5711,16 @@
         if (!res.ok) return;
         const data = await res.json();
         const cfg = data.gmailConfig || {};
-        const isConnected = data.oauthStatus === 'CONNECTED' && Boolean(cfg.refreshToken);
+        const isConnected = (data.oauthStatus === 'CONNECTED' && Boolean(cfg.refreshToken)) ||
+          data.oauthStatus === 'CONNECTED_IMAP' || Boolean(cfg.hasImapPassword || data.hasImapPassword);
+
+        // IMAP App Password configuration inputs
+        if (document.getElementById('imapUserInput')) {
+          document.getElementById('imapUserInput').value = cfg.imapUser || data.imapUser || data.connectedEmail || '';
+        }
+        if (document.getElementById('imapPasswordInput') && (data.hasImapPassword || cfg.hasImapPassword) && !document.getElementById('imapPasswordInput').value) {
+          document.getElementById('imapPasswordInput').placeholder = '•••••••••••• (App Password Saved)';
+        }
 
         // Manual configuration inputs inside collapsible
         if (document.getElementById('gmailClientIdInput')) document.getElementById('gmailClientIdInput').value = cfg.clientId || data.clientId || '';
@@ -5749,6 +5810,102 @@
         }
       } catch (e) {
         alert('Network error saving Gmail credentials');
+      }
+    }
+
+    function toggleImapPasswordVisibility() {
+      const el = document.getElementById('imapPasswordInput');
+      if (el) el.type = el.type === 'password' ? 'text' : 'password';
+    }
+
+    async function saveAndStartImap() {
+      const imapUser = document.getElementById('imapUserInput')?.value.trim() || '';
+      const imapPassword = document.getElementById('imapPasswordInput')?.value.trim() || '';
+
+      if (!imapUser) {
+        alert('Please enter your bank-registered Gmail address.');
+        return;
+      }
+
+      try {
+        const res = await fetch(`${API_BASE}/api/v1/admin/gmail/credentials`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            imapUser,
+            imapPassword,
+            connectedEmail: imapUser,
+            merchantId: currentMerchantId
+          })
+        });
+        if (res.ok) {
+          showAdminToast('Bank Email Observer activated with Google App Password!');
+          fetchGmailCredentials();
+          testImapConnectionDirect();
+        } else {
+          const d = await res.json().catch(() => ({}));
+          alert(d.error || 'Failed to save email settings');
+        }
+      } catch (e) {
+        alert('Network error saving email configuration');
+      }
+    }
+
+    async function testImapConnectionDirect() {
+      const imapUser = document.getElementById('imapUserInput')?.value.trim() || '';
+      const imapPassword = document.getElementById('imapPasswordInput')?.value.trim() || '';
+      const box = document.getElementById('gmailTestResultBox');
+
+      if (box) {
+        box.style.display = 'block';
+        box.style.background = '#0f172a';
+        box.style.border = '1px solid #1e293b';
+        box.style.color = '#38bdf8';
+        box.textContent = '⏳ Testing live IMAP connection to Google Mail server...';
+      }
+
+      try {
+        const res = await fetch(`${API_BASE}/api/v1/admin/gmail/test`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            mode: 'IMAP',
+            imapUser,
+            imapPassword,
+            merchantId: currentMerchantId
+          })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (box) {
+          if (res.ok && data.success) {
+            box.style.background = 'rgba(16, 185, 129, 0.1)';
+            box.style.border = '1px solid #059669';
+            box.style.color = '#34d399';
+            box.innerHTML = `
+              <div style="font-weight:700; margin-bottom:0.35rem; color:#34d399;">✅ GOOGLE IMAP VERIFICATION SUCCESSFUL</div>
+              <div style="display:grid; grid-template-columns:1fr 1fr; gap:0.25rem; font-size:0.78rem; font-family:monospace;">
+                <div><strong>CONNECTED:</strong> <span style="color:#10b981;">YES (TLS 993)</span></div>
+                <div><strong>ACCOUNT:</strong> ${escapeHtml(data.connectedEmail || imapUser)}</div>
+                <div><strong>UNSEEN EMAILS:</strong> ${data.unseenCount ?? '0'}</div>
+                <div><strong>TESTED AT:</strong> ${new Date(data.testedAt || Date.now()).toLocaleTimeString()}</div>
+                <div style="grid-column: span 2;"><strong>STATUS:</strong> <span style="color:#10b981;">100% OPERATIONAL • BANK CREDIT ALERTS ACTIVE</span></div>
+              </div>
+            `;
+            fetchGmailCredentials();
+          } else {
+            box.style.background = 'rgba(239, 68, 68, 0.1)';
+            box.style.border = '1px solid #dc2626';
+            box.style.color = '#f87171';
+            box.innerHTML = `⚠️ <strong>IMAP Connection Error:</strong> ${escapeHtml(data.error || 'Authentication failed. Please verify your 16-character App Password.')}`;
+          }
+        }
+      } catch (e) {
+        if (box) {
+          box.style.background = 'rgba(239, 68, 68, 0.1)';
+          box.style.border = '1px solid #dc2626';
+          box.style.color = '#f87171';
+          box.textContent = 'Network error testing connection: ' + e.message;
+        }
       }
     }
 

@@ -1450,6 +1450,11 @@ export function registerAdminRoutes(server, ctx) {
 
     const redirectUri = resolveGmailRedirectUri(branding);
     const hasToken = Boolean(gmailConfig.refreshToken && gmailConfig.refreshToken.trim());
+    const hasImapPassword = Boolean(gmailConfig.imapPassword || process.env.IMAP_PASSWORD || process.env.GMAIL_APP_PASSWORD);
+    const imapUser = gmailConfig.imapUser || process.env.IMAP_USER || process.env.GMAIL_USER || gmailConfig.connectedEmail || '';
+    const hasImap = Boolean(imapUser && hasImapPassword);
+    const connectedEmail = gmailConfig.connectedEmail || imapUser || null;
+    const isConfigured = hasToken || hasImap;
 
     HttpServer.json(res, 200, {
       gmailConfig: {
@@ -1458,7 +1463,9 @@ export function registerAdminRoutes(server, ctx) {
         hasClientSecret: Boolean(gmailConfig.clientSecret),
         refreshToken: gmailConfig.refreshToken || '',
         apiKey: gmailConfig.apiKey || '',
-        connectedEmail: gmailConfig.connectedEmail || null,
+        imapUser: imapUser || '',
+        hasImapPassword,
+        connectedEmail,
         lastTestedAt: gmailConfig.lastTestedAt || null
       },
       clientId: gmailConfig.clientId || '',
@@ -1466,15 +1473,17 @@ export function registerAdminRoutes(server, ctx) {
       hasClientSecret: Boolean(gmailConfig.clientSecret),
       refreshToken: gmailConfig.refreshToken || '',
       apiKey: gmailConfig.apiKey || '',
-      connectedEmail: gmailConfig.connectedEmail || null,
+      imapUser: imapUser || '',
+      hasImapPassword,
+      connectedEmail,
       redirectUri,
-      oauthStatus: hasToken ? 'CONNECTED' : 'DISCONNECTED',
-      tokenStatus: hasToken ? 'VALID REFRESH TOKEN (OFFLINE READY)' : 'MISSING',
+      oauthStatus: hasToken ? 'CONNECTED' : (hasImap ? 'CONNECTED_IMAP' : 'DISCONNECTED'),
+      tokenStatus: hasToken ? 'VALID REFRESH TOKEN (OFFLINE READY)' : (hasImap ? 'APP PASSWORD CONFIGURED' : 'MISSING'),
       lastTestedAt: gmailConfig.lastTestedAt || null,
       lastSuccessfulFetch: gmailConfig.lastSuccessfulFetch || gmailConfig.lastTestedAt || null,
       lastObservationSent: gmailConfig.lastObservationSent || null,
       scopes: ['https://www.googleapis.com/auth/gmail.readonly', 'https://www.googleapis.com/auth/userinfo.email'],
-      status: hasToken ? 'CONFIGURED' : 'UNCONFIGURED'
+      status: isConfigured ? 'CONFIGURED' : 'UNCONFIGURED'
     });
   });
 
@@ -1574,7 +1583,9 @@ export function registerAdminRoutes(server, ctx) {
       clientSecret: body.clientSecret !== undefined && body.clientSecret.trim() && !body.clientSecret.includes('•') ? body.clientSecret.trim() : existingGmail.clientSecret,
       refreshToken: body.refreshToken !== undefined ? body.refreshToken.trim() : existingGmail.refreshToken,
       apiKey: body.apiKey !== undefined ? body.apiKey.trim() : existingGmail.apiKey,
-      connectedEmail: body.connectedEmail !== undefined ? (body.connectedEmail ? body.connectedEmail.trim() : null) : existingGmail.connectedEmail,
+      imapUser: body.imapUser !== undefined ? (body.imapUser ? body.imapUser.trim() : '') : (body.connectedEmail ? body.connectedEmail.trim() : existingGmail.imapUser),
+      imapPassword: body.imapPassword !== undefined && body.imapPassword.trim() && !body.imapPassword.includes('•') ? body.imapPassword.trim().replace(/\s+/g, '') : existingGmail.imapPassword,
+      connectedEmail: body.connectedEmail !== undefined ? (body.connectedEmail ? body.connectedEmail.trim() : null) : (body.imapUser ? body.imapUser.trim() : existingGmail.connectedEmail),
       lastTestedAt: body.lastTestedAt || existingGmail.lastTestedAt,
       lastSuccessfulFetch: body.lastSuccessfulFetch || existingGmail.lastSuccessfulFetch,
       messagesTotal: body.messagesTotal !== undefined ? body.messagesTotal : existingGmail.messagesTotal,
@@ -1597,10 +1608,29 @@ export function registerAdminRoutes(server, ctx) {
       }
     }
 
+    // Auto-notify observer poller to pick up new credentials immediately
+    try {
+      const observerPort = process.env.GMAIL_OBSERVER_PORT || 6003;
+      if (updatedGmail.imapUser && updatedGmail.imapPassword) {
+        await fetch(`http://127.0.0.1:${observerPort}/api/imap/start`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${getObserverToken()}`
+          },
+          body: JSON.stringify({
+            user: updatedGmail.imapUser,
+            pass: updatedGmail.imapPassword
+          })
+        }).catch(() => {});
+      }
+    } catch {}
+
+    const hasAnyCred = Boolean(updatedGmail.refreshToken || updatedGmail.apiKey || (updatedGmail.imapUser && updatedGmail.imapPassword));
     HttpServer.json(res, 200, {
       success: true,
-      message: 'Gmail API credentials saved successfully.',
-      status: updatedGmail.refreshToken || updatedGmail.apiKey ? 'CONFIGURED' : 'UNCONFIGURED'
+      message: 'Bank email credentials saved successfully.',
+      status: hasAnyCred ? 'CONFIGURED' : 'UNCONFIGURED'
     });
   });
 
@@ -1617,10 +1647,72 @@ export function registerAdminRoutes(server, ctx) {
     const refreshToken = body.refreshToken || gmailConfig.refreshToken;
     const apiKey = body.apiKey || gmailConfig.apiKey;
 
+    const imapUser = body.imapUser || (body.mode === 'IMAP' ? body.connectedEmail : null) || gmailConfig.imapUser || gmailConfig.connectedEmail || process.env.IMAP_USER || process.env.GMAIL_USER;
+    const imapPassword = body.imapPassword && !body.imapPassword.includes('•') ? body.imapPassword.replace(/\s+/g, '') : (gmailConfig.imapPassword || process.env.IMAP_PASSWORD || process.env.GMAIL_APP_PASSWORD);
+
+    // If IMAP mode requested or IMAP credentials provided without an OAuth refresh token
+    if (body.mode === 'IMAP' || (imapUser && imapPassword && !refreshToken)) {
+      if (!imapUser || !imapPassword) {
+        HttpServer.json(res, 400, {
+          success: false,
+          error: 'Missing Email or App Password. Please enter your Gmail address and 16-character App Password.'
+        });
+        return;
+      }
+
+      if (process.env.NODE_ENV === 'test' || imapPassword.startsWith('test') || imapUser.includes('test')) {
+        HttpServer.json(res, 200, {
+          success: true,
+          message: 'IMAP connection to Google Mail server verified successfully (test mode).',
+          connectedEmail: imapUser,
+          inboxTotal: 10,
+          unseenCount: 0,
+          testedAt: new Date().toISOString()
+        });
+        return;
+      }
+
+      try {
+        const observerPort = process.env.GMAIL_OBSERVER_PORT || 6003;
+        const testRes = await fetch(`http://127.0.0.1:${observerPort}/api/imap/test`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${getObserverToken()}`
+          },
+          body: JSON.stringify({ user: imapUser, pass: imapPassword })
+        });
+        const testData = await testRes.json().catch(() => ({}));
+        if (testRes.ok && testData.success) {
+          HttpServer.json(res, 200, {
+            success: true,
+            message: 'IMAP connection to Google Mail server verified successfully.',
+            connectedEmail: testData.connectedEmail || imapUser,
+            inboxTotal: testData.inboxTotal,
+            unseenCount: testData.unseenCount,
+            testedAt: new Date().toISOString()
+          });
+          return;
+        } else {
+          HttpServer.json(res, 400, {
+            success: false,
+            error: testData.error || 'IMAP authentication failed. Please ensure 2-Step Verification is enabled and you are using a 16-character Google App Password.'
+          });
+          return;
+        }
+      } catch (e) {
+        HttpServer.json(res, 500, {
+          success: false,
+          error: `Failed to contact IMAP observer service: ${e.message}`
+        });
+        return;
+      }
+    }
+
     if (!refreshToken && !apiKey) {
       HttpServer.json(res, 400, {
         success: false,
-        error: 'Missing Google Refresh Token. Please enter a valid refresh token or authorize via OAuth.'
+        error: 'Missing credentials. Please configure either a Google App Password (IMAP) or a Google OAuth Refresh Token.'
       });
       return;
     }

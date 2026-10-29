@@ -1,4 +1,4 @@
-﻿import http from 'node:http';
+import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -107,11 +107,12 @@ const masterServer = http.createServer((req, res) => {
     return;
   }
 
-  // 3b. Gmail OAuth & Observer routes
+  // 3b. Gmail & IMAP Email Observer routes
   if (
     pathname === '/oauth/callback' ||
     pathname === '/oauth/url' ||
-    pathname.startsWith('/api/browser')
+    pathname.startsWith('/api/browser') ||
+    pathname.startsWith('/api/imap')
   ) {
     gmailServer.emit('request', req, res);
     return;
@@ -133,20 +134,32 @@ masterServer.listen(PORT, HOST, () => {
   console.log(`  Health Check:              http://${HOST}:${PORT}/health`);
   console.log('====================================================');
 
-  // Automatically start Gmail Observer background scanner on boot if credentials exist
+  // Automatically start Bank Email Observer (IMAP App Password or Gmail OAuth) background scanner on boot
   setTimeout(async () => {
     try {
-      if (gmailServerInstance && gmailServerInstance.poller) {
-        await gmailServerInstance.poller.fetchCredentialsFromPaymentApi();
-        if (gmailServerInstance.poller.credentials?.refreshToken) {
-          gmailServerInstance.poller.start();
-          console.log('[✓] Gmail Observer 24/7 background scanner online.');
-        } else {
-          console.log('[i] Gmail Observer: Waiting for OAuth connection.');
+      if (gmailServerInstance) {
+        // 1. Try starting IMAP Email Observer first (supports Google App Password)
+        if (gmailServerInstance.imapPoller) {
+          await gmailServerInstance.imapPoller.fetchCredentialsFromPaymentApi();
+          if (gmailServerInstance.imapPoller.hasCredentials()) {
+            gmailServerInstance.imapPoller.start();
+            console.log(`[✓] Bank Email IMAP Observer 24/7 background scanner online (${gmailServerInstance.imapPoller.credentials.user}).`);
+          }
+        }
+
+        // 2. Try starting Gmail OAuth Observer if refresh token exists
+        if (gmailServerInstance.poller) {
+          await gmailServerInstance.poller.fetchCredentialsFromPaymentApi();
+          if (gmailServerInstance.poller.credentials?.refreshToken) {
+            gmailServerInstance.poller.start();
+            console.log('[✓] Gmail OAuth Observer 24/7 background scanner online.');
+          } else if (!gmailServerInstance.imapPoller?.isRunning) {
+            console.log('[i] Bank Email Observer: In standby (awaiting Google App Password or OAuth credentials).');
+          }
         }
       }
     } catch (err) {
-      console.warn('[Gmail Observer auto-start]:', err.message);
+      console.warn('[Bank Email Observer auto-start]:', err.message);
     }
   }, 2500);
 });
